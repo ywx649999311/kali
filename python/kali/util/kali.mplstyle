@@ -1,0 +1,69 @@
+# Orignal mpl_settings.py
+
+
+# make ticks longer and thicker
+xtick.major.size: 8
+xtick.minor.size: 6
+xtick.major.width: 2
+xtick.minor.width: 2
+ytick.major.size: 8
+ytick.minor.size: 6
+ytick.major.width: 2
+ytick.minor.width: 2
+
+# make border thicker
+axes.linewidth: 2
+
+# make plotted lines thicker
+lines.linewidth: 2
+
+# make fonts bigger
+xtick.labelsize: 20
+ytick.labelsize: 20
+legend.fontsize: 20
+axes.titlesize: 20
+axes.labelsize: 20
+
+# save figure settings
+savefig.bbox: tight
+
+# set font properties
+font.family: serif
+font.style: normal
+font.variant: normal
+font.weight: normal
+font.stretch: normal
+font.size: 20
+
+text.usetex: True
+    
+# set math mode font properties
+mathtext.cal: cursive
+mathtext.rm: serif
+mathtext.tt: monospace
+mathtext.it: serif:italic
+mathtext.bf: serif:bold
+mathtext.sf: sans
+mathtext.fontset: cm  # Should be 'cm' (Computer Modern), 'stix','stixsans' or 'custom'
+mathtext.fallback_to_cm: True  # When True, use symbols from the Computer
+                               # Modern fonts when a symbol can not be found 
+                               # in one of the custom math fonts.
+
+mathtext.default: rm  # The default font to use for math. Can be any of the 
+                        # LaTeX font names, including the special name 
+                        # "regular" for the same font used in regular text.
+pdf.fonttype: 42  # Force matplotlib to use Type42 (a.k.a. TrueType) fonts for .pdf
+ps.fonttype: 42  # Force matplotlib to use Type42 (a.k.a. TrueType) fonts for .eps
+
+
+
+
+
+
+
+
+
+
+
+
+

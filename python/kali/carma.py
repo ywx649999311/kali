@@ -3,31 +3,17 @@
 """
 
 import numpy as np
-import math as math
 import scipy.stats as spstats
-import cmath as cmath
-import operator as operator
-import sys as sys
-import abc as abc
-import psutil as psutil
-import types as types
-import os as os
-import reprlib as reprlib
-import copy as copy
+import cmath, operator, sys, abc, psutil, os, reprlib, copy
+import warnings, pdb, types, multi_key_dict, math
 from scipy.interpolate import UnivariateSpline
-import warnings as warnings
 import matplotlib.pyplot as plt
-import pdb as pdb
-
 from matplotlib import cm
-
-import multi_key_dict
 
 try:
     import rand
-    import CARMATask_cython as CARMATask_cython
+    import CARMATask_cython
     import kali.lc
-    from kali.util.mpl_settings import set_plot_params
     import kali.util.classproperty
     import kali.util.triangle
 except ImportError:
@@ -36,7 +22,6 @@ except ImportError:
 
 fhgt = 10
 fwid = 16
-set_plot_params(useTex=True)
 COLORX = r'#984ea3'
 COLORY = r'#ff7f00'
 COLORS = [r'#4daf4a', r'#ccebc5']

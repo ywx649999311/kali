@@ -1,7 +1,5 @@
-import math as math
-import cmath as cmath
+import math, cmath, copy, pdb
 import numpy as np
-import copy
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.animation as animation
@@ -9,7 +7,6 @@ from matplotlib import cm as cm
 from matplotlib import gridspec as gridspec
 from matplotlib.collections import LineCollection
 from matplotlib.colors import ListedColormap, BoundaryNorm
-import pdb
 
 import kali.util.triangle as triangle
 

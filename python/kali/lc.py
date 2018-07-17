@@ -1,20 +1,9 @@
 #!/usr/bin/env python
 """	Module that defines light curve objects.
 """
-import math
-import cmath
 import numpy as np
-import operator
-import sys
-import abc
-import psutil
-import types
-import os
-import reprlib
-import copy
-import warnings
-import pdb as pdb
-
+import math, cmath, operator, sys, abc, psutil, types, os, 
+import warnings, reprlib, copy, pdb
 import scipy.stats as spstats
 from scipy.interpolate import UnivariateSpline
 import gatspy.periodic
@@ -23,12 +12,6 @@ import gatspy.periodic
 from astropy import units
 from astropy.coordinates import SkyCoord
 
-try:
-    os.environ['DISPLAY']
-except KeyError as Err:
-    warnings.warn('No display environment! Using matplotlib backend "Agg"')
-    import matplotlib
-    matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 try:
@@ -36,14 +19,12 @@ try:
     import LCTools_cython
     import kali.sampler
     import kali.kernel
-    from kali.util.mpl_settings import set_plot_params
 except ImportError:
     print('kali is not setup. Setup kali by sourcing bin/setup.sh')
     sys.exit(1)
 
 fhgt = 10
 fwid = 16
-set_plot_params(useTex=True)
 COLORX = r'#984ea3'
 COLORY = r'#ff7f00'
 COLORS = [r'#4daf4a', r'#ccebc5']

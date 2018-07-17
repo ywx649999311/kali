@@ -2,22 +2,11 @@
 """	Module to downsample light curves.
 """
 
-import numpy as np
-import math as math
+import numpy as np, math, cmath, operator, sys, abc, psutil, types, os
+import reprlib, copy, warnings, pdb
 import scipy.stats as spstats
-import cmath as cmath
-import operator as operator
-import sys as sys
-import abc as abc
-import psutil as psutil
-import types as types
-import os as os
-import reprlib as reprlib
-import copy as copy
 from scipy.interpolate import UnivariateSpline
-import warnings as warnings
 import matplotlib.pyplot as plt
-import pdb as pdb
 
 try:
     import rand
@@ -29,15 +18,9 @@ try:
 except ImportError:
     print('Cannot import kali.lc! kali is not setup. Setup kali by sourcing bin/setup.sh')
     sys.exit(1)
-try:
-    from kali.util.mpl_settings import set_plot_params
-except ImportError:
-    print('Cannot import kali.util.mpl_settings! kali is not setup. Setup kali by sourcing bin/setup.sh')
-    sys.exit(1)
 
 fhgt = 10
 fwid = 16
-set_plot_params(useTex=True)
 
 ln10 = math.log(10)
 
