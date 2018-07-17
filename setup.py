@@ -133,5 +133,5 @@ setup(
     classifiers=['AGN', 'C-ARMA', 'stochastic', 'MBHBs'],
     platforms=['Linux', 'Mac OSX'],
     license='GNU GENERAL PUBLIC LICENSE, Version 2, June 1991',
-    ext_modules=cythonize([rand_ext, LCTools_ext, CARMATask_ext, MBHBTask_ext, MBHBCARMATask_ext])
+    ext_modules=cythonize([rand_ext, LCTools_ext, CARMATask_ext, MBHBTask_ext, MBHBCARMATask_ext], compiler_directives={'language_level': 3})
 )

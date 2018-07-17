@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""	Module to perform basic C-ARMA modelling.
+"""	Module to perform modulated C-ARMA modelling where the presence of a MBHB causes beaming.
 """
 
 import numpy as np
@@ -15,23 +15,26 @@ import os as os
 import reprlib as reprlib
 import copy as copy
 from scipy.interpolate import UnivariateSpline
+import scipy.signal.spectral
 import warnings as warnings
 import matplotlib.pyplot as plt
+import random
 import pdb as pdb
 
 from matplotlib import cm
 
 import multi_key_dict
+import gatspy.periodic
 
 try:
     import rand
-    import CARMATask_cython as CARMATask_cython
+    import MBHBCARMATask_cython as MBHBCARMATask_cython
     import kali.lc
     from kali.util.mpl_settings import set_plot_params
     import kali.util.classproperty
     import kali.util.triangle
 except ImportError:
-    print('kali is not setup. Setup kali by sourcing bin/setup.sh')
+    print 'kali is not setup. Setup kali by sourcing bin/setup.sh'
     sys.exit(1)
 
 fhgt = 10
@@ -65,83 +68,97 @@ def MAD(self, a):
 
 
 def roots(p, q, Theta):
-    r = CARMATask.r
+    """!
+    \brief Theta -> Roots
+    """
+    r = MBHBCARMATask.r
     ARPoly = np.zeros(p + 1)
     ARPoly[0] = 1.0
-    for i in range(p):
-        ARPoly[i + 1] = Theta[i]
+    for i in xrange(p):
+        ARPoly[i + 1] = Theta[r + i]
     ARRoots = np.array(np.roots(ARPoly))
     MAPoly = np.zeros(q + 1)
-    for i in range(q + 1):
-        MAPoly[i] = Theta[p + q - i]
+    for i in xrange(q + 1):
+        MAPoly[i] = Theta[r + p + q - i]
     MARoots = np.array(np.roots(MAPoly))
-    Rho = np.zeros(p + q + 1, dtype='complex128')
-    for i in range(p):
-        Rho[i] = ARRoots[i]
-    for i in range(q):
-        Rho[p + i] = MARoots[i]
+    Rho = np.zeros(r + p + q + 1, dtype='complex128')
+    for i in xrange(r):
+        Rho[i] = Theta[i]
+    for i in xrange(p):
+        Rho[r + i] = ARRoots[i]
+    for i in xrange(q):
+        Rho[r + p + i] = MARoots[i]
     Sigma = np.require(np.zeros(p*p), requirements=['F', 'A', 'W', 'O', 'E'])
     ThetaC = np.require(np.array(Theta), requirements=['F', 'A', 'W', 'O', 'E'])
-    CARMATask_cython.get_Sigma(r, p, q, ThetaC, Sigma)
-    Rho[p + q] = math.sqrt(Sigma[0])
+    MBHBCARMATask_cython.get_Sigma(r, p, q, ThetaC, Sigma)
+    Rho[r + p + q] = math.sqrt(Sigma[0])
     return Rho
 
 
 def coeffs(p, q, Rho):
-    r = CARMATask.r
+    """!
+    \brief Roots -> Coeffs
+    """
+    r = MBHBCARMATask.r
     ARRoots = np.zeros(p, dtype='complex128')
-    for i in range(p):
-        ARRoots[i] = Rho[i]
+    for i in xrange(p):
+        ARRoots[i] = Rho[r + i]
     ARPoly = np.array(np.poly(ARRoots))
     MARoots = np.zeros(q, dtype='complex128')
-    for i in range(q):
-        MARoots[i] = Rho[p + i]
+    for i in xrange(q):
+        MARoots[i] = Rho[r + p + i]
     if q == 0:
         MAPoly = np.ones(1)
     else:
         MAPoly = np.array(np.poly(MARoots))
     ThetaPrime = np.require(
-        np.array(ARPoly[1:].tolist() + MAPoly.tolist()[::-1]), requirements=['F', 'A', 'W', 'O', 'E'])
+        np.array(Rho[0:r].tolist() + ARPoly[1:].tolist() + MAPoly.tolist()[::-1]),
+        requirements=['F', 'A', 'W', 'O', 'E'])
     SigmaPrime = np.require(np.zeros(p*p), requirements=['F', 'A', 'W', 'O', 'E'])
-    CARMATask_cython.get_Sigma(r, p, q, ThetaPrime, SigmaPrime)
+    MBHBCARMATask_cython.get_Sigma(r, p, q, ThetaPrime, SigmaPrime)
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        Sigma00 = math.pow(Rho[p + q], 2.0)
+        Sigma00 = math.pow(Rho[r + p + q], 2.0)
     try:
         bQ = math.sqrt(Sigma00/SigmaPrime[0])
     except ValueError:
         bQ = 1.0
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        for i in range(q + 1):
+        for i in xrange(q + 1):
             MAPoly[i] = bQ*MAPoly[i]
-    Theta = np.zeros(p + q + 1, dtype='float64')
-    for i in range(p):
-        Theta[i] = ARPoly[i + 1].real
-    for i in range(q + 1):
-        Theta[p + i] = MAPoly[q - i].real
+    Theta = np.zeros(r + p + q + 1, dtype='float64')
+    for i in xrange(r):
+        Theta[i] = Rho[i]
+    for i in xrange(p):
+        Theta[r + i] = ARPoly[i + 1].real
+    for i in xrange(q + 1):
+        Theta[r + p + i] = MAPoly[q - i].real
     return Theta
 
 
 def timescales(p, q, Rho):
-    r = CARMATask.r
+    """!
+    \brief Roots -> Timescales
+    """
+    r = MBHBCARMATask.r
     imagPairs = 0
-    for i in range(p):
+    for i in xrange(p):
         if Rho[r + i].imag != 0.0:
             imagPairs += 1
-    numImag = imagPairs//2
+    numImag = imagPairs/2
     numReal = numImag + (p - imagPairs)
     decayTimescales = np.zeros(numReal)
     oscTimescales = np.zeros(numImag)
-    realRoots = set(Rho[r: r + p].real)
+    realRoots = set(Rho[r:r + p].real)
     imagRoots = set(abs(Rho[r:r + p].imag)).difference(set([0.0]))
     realAR = sorted([1.0/abs(x) for x in realRoots])
     imagAR = sorted([(2.0*math.pi)/abs(x) for x in imagRoots])
     imagPairs = 0
-    for i in range(q):
+    for i in xrange(q):
         if Rho[r + p + i].imag != 0.0:
             imagPairs += 1
-    numImag = imagPairs//2
+    numImag = imagPairs/2
     numReal = numImag + (q - imagPairs)
     decayTimescales = np.zeros(numReal)
     oscTimescales = np.zeros(numImag)
@@ -149,14 +166,40 @@ def timescales(p, q, Rho):
     imagRoots = set(abs(Rho[r + p:r + p + q].imag)).difference(set([0.0]))
     realMA = sorted([1.0/abs(x) for x in realRoots])
     imagMA = sorted([(2.0*math.pi)/abs(x) for x in imagRoots])
-    return np.array(realAR + imagAR + realMA + imagMA + [Rho[r + p + q]])
+    return np.array(Rho[0:r].tolist() + realAR + imagAR + realMA + imagMA + [Rho[r + p + q]])
 
 
-class CARMATask(object):
+class MBHBCARMATask(object):
 
-    _type = 'kali.carma'
-    _r = 0
+    _type = 'kali.mbhbcarma'
+    _r = 8
+    G = 6.67408e-11
+    c = 299792458.0
+    pi = 3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117067
+    twoPi = 2.0*pi
+    fourPi = 4.0*pi
+    fourPiSq = 4.0*math.pow(pi, 2.0)
+    Parsec = 3.0857e16
+    Day = 86164.090530833
+    Year = 31557600.0
+    SolarMass = 1.98855e30
+    kms2ms = 1.0e3
+    SolarMassPerCubicParsec = SolarMass/math.pow(Parsec, 3.0)
+    sigmaStars = 200.0
+    rhoStars = 1000.0
+    H = 16.0
+
     _dict = multi_key_dict.multi_key_dict()
+    _dict[r'$a_{1}$ (pc)', 0, r'0', r'a1', r'a_1', r'$a_{1}$', r'$a_{1}~\mathrm{(pc)}$',
+          'semi-major axis 1', 'semimajor axis 1'] = 0
+    _dict[r'$a_{2}$ (pc)', 1, r'1', r'a2', r'a_2', r'$a_{2}$', r'$a_{2}~\mathrm{(pc)}$',
+          'semi-major axis 2', 'semimajor axis 2'] = 1
+    _dict[r'$T$ (d)', 2, r'2', r'T', r'$T$', r'$T~\mathrm{(d)}$', 'period'] = 2
+    _dict[r'$e$', 3, r'3', r'e', 'ellipticity', 'eccentricity'] = 3
+    _dict[r'$\Omega$ (deg.)', 4, r'4', r'$\Omega~\mathrm{(deg.)}$', r'Omega', r'omega'] = 4
+    _dict[r'$i$ (deg.)', 5, r'5', r'$i~\mathrm{(deg.)}$', r'Inclination', r'inclination'] = 5
+    _dict[r'$\tau$ (d)', 6, r'6', r'$\tau~\mathrm{(d)}$', r'Tau', r'tau'] = 6
+    _dict[r'$F$', 7, r'7', r'Flux', r'flux'] = 7
 
     def __init__(self, p, q, nthreads=psutil.cpu_count(logical=True), nburn=1000000,
                  nwalkers=25*psutil.cpu_count(logical=True), nsteps=250, maxEvals=10000, xTol=0.001,
@@ -181,7 +224,7 @@ class CARMATask(object):
             assert isinstance(xTol, float), r'xTol must be a float'
             self._p = p
             self._q = q
-            self._ndims = self._p + self._q + 1
+            self._ndims = self._r + self._p + self._q + 1
             self._nthreads = nthreads
             self._nburn = nburn
             self._nwalkers = nwalkers
@@ -195,11 +238,11 @@ class CARMATask(object):
                 np.zeros(self._nwalkers*self._nsteps), requirements=['F', 'A', 'W', 'O', 'E'])
             self._LnLikelihood = np.require(
                 np.zeros(self._nwalkers*self._nsteps), requirements=['F', 'A', 'W', 'O', 'E'])
-            self._taskCython = CARMATask_cython.CARMATask_cython(self._p, self._q, self._nthreads,
-                                                                 self._nburn)
+            self._taskCython = MBHBCARMATask_cython.MBHBCARMATask_cython(self._p, self._q, self._nthreads,
+                                                                         self._nburn)
             self._pDIC = None
             self._dic = None
-            self._name = 'kali.CARMATask(%d, %d)'%(self.p, self.q)
+            self._name = 'kali.MBHBCARMATask(%d, %d)'%(self.p, self.q)
         except AssertionError as err:
             raise AttributeError(str(err))
 
@@ -216,7 +259,8 @@ class CARMATask(object):
         \brief Restore an un-pickled task completely by setting the c-pointer to the right Cython class.
         """
         self.__dict__ = copy.copy(state)
-        self._taskCython = CARMATask_cython.CARMATask_cython(self._p, self._q, self._nthreads, self._nburn)
+        self._taskCython = MBHBCARMATask_cython.MBHBCARMATask_cython(self._p, self._q, self._nthreads,
+                                                                     self._nburn)
 
     @kali.util.classproperty.ClassProperty
     @classmethod
@@ -384,8 +428,8 @@ class CARMATask(object):
             self._rootChain = np.require(
                 np.zeros((self._ndims, self._nwalkers, self._nsteps), dtype='complex128'),
                 requirements=['F', 'A', 'W', 'O', 'E'])
-            for stepNum in range(self._nsteps):
-                for walkerNum in range(self._nwalkers):
+            for stepNum in xrange(self._nsteps):
+                for walkerNum in xrange(self._nwalkers):
                     self._rootChain[:, walkerNum, stepNum] = roots(
                         self._p, self._q, Chain[:, walkerNum, stepNum])
         return self._rootChain
@@ -401,8 +445,8 @@ class CARMATask(object):
                 requirements=['F', 'A', 'W', 'O', 'E'])
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
-                for stepNum in range(self._nsteps):
-                    for walkerNum in range(self._nwalkers):
+                for stepNum in xrange(self._nsteps):
+                    for walkerNum in xrange(self._nwalkers):
                         self._timescaleChain[:, walkerNum, stepNum] = timescales(
                             self._p, self._q, rootChain[:, walkerNum, stepNum])
         return self._timescaleChain
@@ -428,13 +472,13 @@ class CARMATask(object):
         return self._dic
 
     def __repr__(self):
-        return "kali.carma.CARMATask(%d, %d, %d, %d, %d, %d, %d, %f)"%(self._p, self._q, self._nthreads,
-                                                                       self._nburn, self._nwalkers,
-                                                                       self._nsteps, self._maxEvals,
-                                                                       self._xTol)
+        return "kali.mbhbcarma.MBHBCARMATask(%d, %d, %d, %d, %d, %d, %d, %f)"%(self._p, self._q,
+                                                                               self._nthreads, self._nburn,
+                                                                               self._nwalkers, self._nsteps,
+                                                                               self._maxEvals, self._xTol)
 
     def __str__(self):
-        line = 'p: %d; q: %d; ndims: %d\n'%(self._p, self._q, self._ndims)
+        line = 'r: %d; p: %d; q: %d; ndims: %d\n'%(self._r, self._p, self._q, self._ndims)
         line += 'nthreads (Number of hardware threads to use): %d\n'%(self._nthreads)
         line += 'nburn (Number of light curve steps to burn): %d\n'%(self._nburn)
         line += 'nwalkers (Number of MCMC walkers): %d\n'%(self._nwalkers)
@@ -446,10 +490,10 @@ class CARMATask(object):
 
     def __eq__(self, other):
         if self.__class__ == other.__class__:
-            if ((self._p == other.p) and (self._q == other.q) and (self._nthreads == other.nthreads) and
-                (self._nburn == other.nburn) and (self._nwalkers == other.nwalkers) and
-                (self._nsteps == other.nsteps) and (self._maxEvals == other.maxEvals) and
-                    (self.xTol == other.xTol)):
+            if ((self._r == other._r) and (self._p == other.p) and (self._q == other.q) and
+                    (self._nthreads == other.nthreads) and (self._nburn == other.nburn) and
+                    (self._nwalkers == other.nwalkers) and (self._nsteps == other.nsteps) and
+                    (self._maxEvals == other.maxEvals) and (self.xTol == other.xTol)):
                 return True
             else:
                 return False
@@ -485,7 +529,7 @@ class CARMATask(object):
             assert isinstance(nwalkers, int), r'nwalkers must be an integer'
             assert nsteps > 0, r'nsteps must be greater than 0'
             assert isinstance(nsteps, int), r'nsteps must be an integer'
-            self._taskCython.reset_CARMATask(p, q, nburn)
+            self._taskCython.reset_MBHBCARMATask(p, q, nburn)
             self._p = p
             self._q = q
             self._ndims = self._p + self._q + 1
@@ -567,7 +611,237 @@ class CARMATask(object):
             self._taskCython.set_P(np.reshape(P, newshape=(self._p*self._p), order='F'), tnum)
             return newP
 
-    def simulate(self, duration=None, tIn=None, tolIR=1.0e-3, fracIntrinsicVar=0.15, fracNoiseToSignal=0.001,
+    def epoch(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Epoch(tnum)
+
+    def period(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Period(tnum)
+
+    def a1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_A1(tnum)
+
+    def a2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_A2(tnum)
+
+    def m1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_M1(tnum)
+
+    def m2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_M2(tnum)
+
+    def m12(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_M12(tnum)
+
+    def mratio(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_M2OverM1(tnum)
+
+    def rPeribothron1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RPeribothron1(tnum)
+
+    def rPeribothron2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RPeribothron2(tnum)
+
+    def rApobothron1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RApobothron1(tnum)
+
+    def rApobothron2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RApobothron2(tnum)
+
+    def rPeribothron(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RPeribothronTot(tnum)
+
+    def rApobothron(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RApobothronTot(tnum)
+
+    def rS1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RS1(tnum)
+
+    def rS2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RS2(tnum)
+
+    def eccentricity(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Eccentricity(tnum)
+
+    def omega1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Omega1(tnum)
+
+    def omega2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Omega2(tnum)
+
+    def inclination(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Inclination(tnum)
+
+    def tau(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Tau(tnum)
+
+    def M(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_MeanAnomoly(tnum)
+
+    def E(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_EccentricAnomoly(tnum)
+
+    def nu(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_TrueAnomoly(tnum)
+
+    def r1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_R1(tnum)
+
+    def r2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_R2(tnum)
+
+    def theta1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Theta1(tnum)
+
+    def theta2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Theta2(tnum)
+
+    def Beta1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Beta1(tnum)
+
+    def Beta2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_Beta2(tnum)
+
+    def radialBeta1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RadialBeta1(tnum)
+
+    def radialBeta2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_RadialBeta2(tnum)
+
+    def dopplerFactor1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_DopplerFactor1(tnum)
+
+    def dopplerFactor2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_DopplerFactor2(tnum)
+
+    def beamingFactor1(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_BeamingFactor1(tnum)
+
+    def beamingFactor2(self, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_BeamingFactor2(tnum)
+
+    def aH(self, sigmaStars=200.0, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_aH(sigmaStars, tnum)
+
+    def aGW(self, sigmaStars=200.0, rhoStars=1000.0, H=16, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_aGW(sigmaStars, rhoStars, H, tnum)
+
+    def durationInHardState(self, sigmaStars=200.0, rhoStars=1000.0, H=16, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_durationInHardState(sigmaStars, rhoStars, H, tnum)
+
+    def ejectedMass(self, sigmaStars=200.0, rhoStars=1000.0, H=16, tnum=None):
+        if tnum is None:
+            tnum = 0
+        return self._taskCython.get_ejectedMass(sigmaStars, rhoStars, H, tnum)
+
+    def beam(self, duration=None, tIn=None, tnum=None, tolIR=1.0e-3, startT=0.0,
+             fracIntrinsicVar=0.15, fracNoiseToSignal=0.001,
+             maxSigma=2.0, minTimescale=2.0, maxTimescale=0.5):
+        if tnum is None:
+            tnum = 0
+        if tIn is None and duration is not None:
+            numCadences = int(round(float(duration)/self._taskCython.get_dt(threadNum=tnum)))
+            intrinsicLC = kali.lc.mockLC(name='', band='', numCadences=numCadences,
+                                         deltaT=self._taskCython.get_dt(threadNum=tnum), tolIR=tolIR,
+                                         startT=startT, fracIntrinsicVar=fracIntrinsicVar,
+                                         fracNoiseToSignal=fracNoiseToSignal, maxSigma=maxSigma,
+                                         minTimescale=minTimescale, maxTimescale=maxTimescale,
+                                         pSim=self._p, qSim=self._q)
+        elif duration is None and tIn is not None:
+            numCadences = tIn.shape[0]
+            t = np.require(np.array(tIn), requirements=['F', 'A', 'W', 'O', 'E'])
+            intrinsicLC = kali.lc.mockLC(name='', band='', tIn=t, startT=startT,
+                                         fracIntrinsicVar=fracIntrinsicVar,
+                                         fracNoiseToSignal=fracNoiseToSignal, tolIR=tolIR, maxSigma=maxSigma,
+                                         minTimescale=minTimescale, maxTimescale=maxTimescale,
+                                         pSim=self._p, qSim=self._q)
+        self._taskCython.make_BeamedLC(
+            intrinsicLC.numCadences, intrinsicLC.tolIR, intrinsicLC.startT, intrinsicLC.fracIntrinsicVar,
+            intrinsicLC.fracNoiseToSignal, intrinsicLC.t, intrinsicLC.x, intrinsicLC.y, intrinsicLC.yerr,
+            intrinsicLC.mask, intrinsicLC.XSim, intrinsicLC.PSim, threadNum=tnum)
+        intrinsicLC._simulatedCadenceNum = numCadences - 1
+        intrinsicLC._T = intrinsicLC.t[-1] - intrinsicLC.t[0]
+        return intrinsicLC
+
+    def simulate(self, duration=None, tIn=None, tolIR=1.0e-3, startT=0.0,
+                 fracIntrinsicVar=0.15, fracNoiseToSignal=0.001,
                  maxSigma=2.0, minTimescale=2.0, maxTimescale=0.5, burnSeed=None, distSeed=None,
                  tnum=None):
         if tnum is None:
@@ -576,18 +850,19 @@ class CARMATask(object):
             numCadences = int(round(float(duration)/self._taskCython.get_dt(threadNum=tnum)))
             intrinsicLC = kali.lc.mockLC(name='', band='', numCadences=numCadences,
                                          deltaT=self._taskCython.get_dt(threadNum=tnum), tolIR=tolIR,
-                                         fracIntrinsicVar=fracIntrinsicVar,
+                                         startT=startT, fracIntrinsicVar=fracIntrinsicVar,
                                          fracNoiseToSignal=fracNoiseToSignal, maxSigma=maxSigma,
                                          minTimescale=minTimescale, maxTimescale=maxTimescale,
                                          pSim=self._p, qSim=self._q)
         elif duration is None and tIn is not None:
             numCadences = tIn.shape[0]
             t = np.require(np.array(tIn), requirements=['F', 'A', 'W', 'O', 'E'])
-            intrinsicLC = kali.lc.mockLC(name='', band='', tIn=t, fracIntrinsicVar=fracIntrinsicVar,
+            intrinsicLC = kali.lc.mockLC(name='', band='', tIn=t, startT=startT,
+                                         fracIntrinsicVar=fracIntrinsicVar,
                                          fracNoiseToSignal=fracNoiseToSignal, tolIR=tolIR, maxSigma=maxSigma,
                                          minTimescale=minTimescale, maxTimescale=maxTimescale,
                                          pSim=self._p, qSim=self._q)
-            for i in range(intrinsicLC.numCadences):
+            for i in xrange(intrinsicLC.numCadences):
                 intrinsicLC.mask[i] = 1.0
         randSeed = np.zeros(1, dtype='uint32')
         if burnSeed is None:
@@ -597,14 +872,14 @@ class CARMATask(object):
             rand.rdrand(randSeed)
             distSeed = randSeed[0]
         self._taskCython.make_IntrinsicLC(
-            intrinsicLC.numCadences, intrinsicLC.tolIR, intrinsicLC.fracIntrinsicVar,
+            intrinsicLC.numCadences, intrinsicLC.tolIR, intrinsicLC.startT, intrinsicLC.fracIntrinsicVar,
             intrinsicLC.fracNoiseToSignal, intrinsicLC.t, intrinsicLC.x, intrinsicLC.y, intrinsicLC.yerr,
             intrinsicLC.mask, intrinsicLC.XSim, intrinsicLC.PSim, burnSeed, distSeed, threadNum=tnum)
         intrinsicLC._simulatedCadenceNum = numCadences - 1
         intrinsicLC._T = intrinsicLC.t[-1] - intrinsicLC.t[0]
         return intrinsicLC
 
-    def extend(
+    '''def extend(
             self, intrinsicLC, duration=None, tIn=None, gap=None, distSeed=None, noiseSeed=None, tnum=None):
         if tnum is None:
             tnum = 0
@@ -613,8 +888,8 @@ class CARMATask(object):
             rand.rdrand(randSeed)
             distSeed = randSeed[0]
         if noiseSeed is None:
-            rand.rdrand(noiseSeed)
-            distSeed = randSeed[0]
+            rand.rdrand(randSeed)
+            noiseSeed = randSeed[0]
         if intrinsicLC.pSim != self.p:
             intrinsicLC.pSim = self.p
         if intrinsicLC.qSim != self.q:
@@ -637,19 +912,19 @@ class CARMATask(object):
         newy = np.require(np.zeros(newNumCadences), requirements=['F', 'A', 'W', 'O', 'E'])
         newyerr = np.require(np.zeros(newNumCadences), requirements=['F', 'A', 'W', 'O', 'E'])
         newmask = np.require(np.zeros(newNumCadences), requirements=['F', 'A', 'W', 'O', 'E'])
-        for i in range(intrinsicLC.numCadences):
+        for i in xrange(intrinsicLC.numCadences):
             newt[i] = intrinsicLC.t[i]
             newx[i] = intrinsicLC.x[i]
             newy[i] = intrinsicLC.y[i]
             newyerr[i] = intrinsicLC.yerr[i]
             newmask[i] = intrinsicLC.mask[i]
         if tIn is None and duration is not None:
-            for i in range(intrinsicLC.numCadences, newNumCadences):
+            for i in xrange(intrinsicLC.numCadences, newNumCadences):
                 newt[i] = newt[intrinsicLC.numCadences - 1] + gapSize + \
                     (i - intrinsicLC.numCadences + 1)*self._taskCython.get_dt(threadNum=tnum)
                 newmask[i] = 1.0
         elif duration is None and gap is None and tIn is not None:
-            for i in range(intrinsicLC.numCadences, newNumCadences):
+            for i in xrange(intrinsicLC.numCadences, newNumCadences):
                 newt[i] = tIn[i - intrinsicLC.numCadences]
                 newmask[i] = 1.0
         else:
@@ -677,7 +952,30 @@ class CARMATask(object):
         intrinsicLC.y = newy
         intrinsicLC.yerr = newyerr
         intrinsicLC.mask = newmask
-        intrinsicLC._statistics()
+
+        count = int(np.sum(intrinsicLC.mask))
+        y_meanSum = 0.0
+        yerr_meanSum = 0.0
+        for i in xrange(intrinsicLC.numCadences):
+            y_meanSum += intrinsicLC.mask[i]*intrinsicLC.y[i]
+            yerr_meanSum += intrinsicLC.mask[i]*intrinsicLC.yerr[i]
+        if count > 0.0:
+            intrinsicLC._mean = y_meanSum/count
+            intrinsicLC._meanerr = yerr_meanSum/count
+        else:
+            intrinsicLC._mean = 0.0
+            intrinsicLC._meanerr = 0.0
+        y_stdSum = 0.0
+        yerr_stdSum = 0.0
+        for i in xrange(intrinsicLC.numCadences):
+            y_stdSum += math.pow(intrinsicLC.mask[i]*intrinsicLC.y[i] - intrinsicLC._mean, 2.0)
+            yerr_stdSum += math.pow(intrinsicLC.mask[i]*intrinsicLC.yerr[i] - intrinsicLC._meanerr, 2.0)
+        if count > 0.0:
+            intrinsicLC._std = math.sqrt(y_stdSum/count)
+            intrinsicLC._stderr = math.sqrt(yerr_stdSum/count)
+        else:
+            intrinsicLC._std = 0.0
+            intrinsicLC._stderr = 0.0'''
 
     def observe(self, intrinsicLC, noiseSeed=None, tnum=None):
         if tnum is None:
@@ -691,61 +989,73 @@ class CARMATask(object):
                 intrinsicLC.numCadences, intrinsicLC.tolIR, intrinsicLC.fracIntrinsicVar,
                 intrinsicLC.fracNoiseToSignal, intrinsicLC.t, intrinsicLC.x, intrinsicLC.y, intrinsicLC.yerr,
                 intrinsicLC.mask, noiseSeed, threadNum=tnum)
-        else:
+        '''else:
             self._taskCython.extend_ObservationNoise(
                 intrinsicLC.numCadences, intrinsicLC.observedCadenceNum, intrinsicLC.tolIR,
                 intrinsicLC.fracIntrinsicVar, intrinsicLC.fracNoiseToSignal, intrinsicLC.t, intrinsicLC.x,
                 intrinsicLC.y, intrinsicLC.yerr, intrinsicLC.mask, noiseSeed, threadNum=tnum)
-            intrinsicLC._observedCadenceNum = intrinsicLC._numCadences - 1
+            intrinsicLC._observedCadenceNum = intrinsicLC._numCadences - 1'''
         intrinsicLC._statistics()
 
-    def logPrior(self, observedLC, forced=True, tnum=None):
+    def logPrior(self, observedLC, forced=True, widthT=0.01, widthF=0.05, tnum=None):
         if tnum is None:
             tnum = 0
-        observedLC._logPrior = self._taskCython.compute_LnPrior(observedLC.numCadences, observedLC.tolIR,
+        periodEst = self.estimate(observedLC)
+        observedLC._logPrior = self._taskCython.compute_LnPrior(observedLC.numCadences, observedLC.meandt,
+                                                                observedLC.tolIR,
+                                                                observedLC.startT,
                                                                 observedLC.maxSigma*observedLC.std,
                                                                 observedLC.minTimescale*observedLC.mindt,
                                                                 observedLC.maxTimescale*observedLC.T,
+                                                                np.min(observedLC.y), np.max(observedLC.y),
                                                                 observedLC.t, observedLC.x,
-                                                                observedLC.y - observedLC.mean,
-                                                                observedLC.yerr, observedLC.mask, tnum)
+                                                                observedLC.y, observedLC.yerr,
+                                                                observedLC.mask,
+                                                                periodEst, widthT*periodEst,
+                                                                observedLC.mean, widthF*observedLC.mean,
+                                                                tnum)
         return observedLC._logPrior
 
-    def logLikelihood(self, observedLC, forced=True, tnum=None):
+    def logLikelihood(self, observedLC, widthT=0.01, widthF=0.05, forced=True, tnum=None):
         if tnum is None:
             tnum = 0
         observedLC.pComp = self.p
         observedLC.qComp = self.q
-        observedLC._logPrior = self.logPrior(observedLC, forced=forced, tnum=tnum)
+        periodEst = self.estimate(observedLC)
+        observedLC._logPrior = self.logPrior(observedLC, widthT=widthT, widthF=widthF,
+                                             forced=forced, tnum=tnum)
         if forced is True:
             observedLC._computedCadenceNum = -1
         if observedLC._computedCadenceNum == -1:
-            for rowCtr in range(observedLC.pComp):
+            for rowCtr in xrange(observedLC.pComp):
                 observedLC.XComp[rowCtr] = 0.0
-                for colCtr in range(observedLC.pComp):
+                for colCtr in xrange(observedLC.pComp):
                     observedLC.PComp[rowCtr + observedLC.pComp*colCtr] = 0.0
             observedLC._logLikelihood = self._taskCython.compute_LnLikelihood(
-                observedLC.numCadences, observedLC._computedCadenceNum, observedLC.tolIR, observedLC.t,
-                observedLC.x, observedLC.y - observedLC.mean, observedLC.yerr, observedLC.mask,
-                observedLC.XComp, observedLC.PComp, tnum)
+                observedLC.numCadences, observedLC._computedCadenceNum, observedLC.tolIR, observedLC.startT,
+                observedLC.t, observedLC.x, observedLC.y, observedLC.yerr, observedLC.mask,
+                observedLC.XComp, observedLC.PComp,
+                periodEst, widthT*periodEst,
+                observedLC.mean, widthF*observedLC.mean,
+                tnum)
             observedLC._logPosterior = observedLC._logPrior + observedLC._logLikelihood
             observedLC._computedCadenceNum = observedLC.numCadences - 1
         elif observedLC._computedCadenceNum == observedLC.numCadences - 1:
             pass
-        else:
+        '''else:
             observedLC._logLikelihood = self._taskCython.update_LnLikelihood(
                 observedLC.numCadences, observedLC._computedCadenceNum, observedLC._logLikelihood,
                 observedLC.tolIR, observedLC.t, observedLC.x, observedLC.y - observedLC.mean, observedLC.yerr,
                 observedLC.mask, observedLC.XComp, observedLC.PComp, tnum)
             observedLC._logPosterior = observedLC._logPrior + observedLC._logLikelihood
-            observedLC._computedCadenceNum = observedLC.numCadences - 1
+            observedLC._computedCadenceNum = observedLC.numCadences - 1'''
         return observedLC._logLikelihood
 
     def logPosterior(self, observedLC, forced=True, tnum=None):
         lnLikelihood = self.logLikelihood(observedLC, forced=forced, tnum=tnum)
         return observedLC._logPosterior
 
-    def acvf(self, start=0.0, stop=100.0, num=100, endpoint=True, base=10.0, spacing='linear'):
+    '''def acvf(self, start=0.0, stop=100.0, num=100, endpoint=True, base=10.0, spacing='linear'):
         if spacing.lower() in ['log', 'logarithm', 'ln', 'log10']:
             lags = np.logspace(np.log10(start)/np.log10(base), np.log10(
                 stop)/np.log10(base), num=num, endpoint=endpoint, base=base)
@@ -870,9 +1180,9 @@ class CARMATask(object):
             aList.pop(0)
             return PSDVals
         else:
-            for freq in range(nfreqs):
+            for freq in xrange(nfreqs):
                 val = 0.0
-                for i in range(self.p + 1):
+                for i in xrange(self.p + 1):
                     j = 2*self.p - i - order
                     if ((j >= 0) and (j < self.p + 1)):
                         val += (aList[i]*aList[j]*((2.0*math.pi*1j*freqs[freq])**(
@@ -888,9 +1198,9 @@ class CARMATask(object):
         if ((order % 2 == 1) or (order <= -1) or (order > 2*self.q)):
             return psdnumerator
         else:
-            for freq in range(nfreqs):
+            for freq in xrange(nfreqs):
                 val = 0.0
-                for i in range(self.q + 1):
+                for i in xrange(self.q + 1):
                     j = 2*self.q - i - order
                     if ((j >= 0) and (j < self.q + 1)):
                         val += (bList[i]*bList[j]*((2.0*math.pi*1j*freqs[freq])**(
@@ -909,57 +1219,46 @@ class CARMATask(object):
         maxDenomOrder = 2*self.p
         maxNumerOrder = 2*self.q
 
-        psdnumeratorcomponent = np.zeros((num, maxNumerOrder//2 + 1))
-        psddenominatorcomponent = np.zeros((num, maxDenomOrder//2 + 1))
+        psdnumeratorcomponent = np.zeros((num, (maxNumerOrder/2) + 1))
+        psddenominatorcomponent = np.zeros((num, (maxDenomOrder/2) + 1))
 
         psdnumerator = np.zeros(num)
         psddenominator = np.zeros(num)
         psd = np.zeros(num)
 
-        for orderVal in range(0, maxNumerOrder + 1, 2):
-            psdnumeratorcomponent[:, orderVal//2] = self._psdnumerator(freqs, orderVal)
+        for orderVal in xrange(0, maxNumerOrder + 1, 2):
+            psdnumeratorcomponent[:, orderVal/2] = self._psdnumerator(freqs, orderVal)
 
-        for orderVal in range(0, maxDenomOrder + 1, 2):
-            psddenominatorcomponent[:, orderVal//2] = self._psddenominator(freqs, orderVal)
+        for orderVal in xrange(0, maxDenomOrder + 1, 2):
+            psddenominatorcomponent[:, orderVal/2] = self._psddenominator(freqs, orderVal)
 
-        for freq in range(num):
-            for orderVal in range(0, maxNumerOrder + 1, 2):
-                psdnumerator[freq] += psdnumeratorcomponent[freq, orderVal//2]
-            for orderVal in range(0, maxDenomOrder + 1, 2):
-                psddenominator[freq] += psddenominatorcomponent[freq, orderVal//2]
+        for freq in xrange(num):
+            for orderVal in xrange(0, maxNumerOrder + 1, 2):
+                psdnumerator[freq] += psdnumeratorcomponent[freq, orderVal/2]
+            for orderVal in xrange(0, maxDenomOrder + 1, 2):
+                psddenominator[freq] += psddenominatorcomponent[freq, orderVal/2]
             psd[freq] = psdnumerator[freq]/psddenominator[freq]
         return freqs, psd, psdnumerator, psddenominator, psdnumeratorcomponent, psddenominatorcomponent
 
-    def plotpsd(self, fig=-5, LC=None, doShow=False, clearFig=True,
-                colorx=COLORX, colory=COLORY, colors=COLORS):
+    def plotpsd(self, fig=-5, LC=None, doShow=False, clearFig=True):
         newFig = plt.figure(fig, figsize=(fwid, fhgt))
         if clearFig:
             plt.clf()
         if LC is not None:
-            start = 1.0/LC.T
-            stop = 1.0/LC.mindt
-            if np.sum(LC.y) != 0.0:
-                freqsE, periodogramE, periodogramerrE = LC.periodogram()
+            start = LC.mindt
+            stop = LC.T
         else:
             start = 1.0e-4
             stop = 1.0e3
         freqsM, psdM, psdNumer, psdDenom, psdNumerComp, psdDenomComp = self.psd(
             start=start, stop=stop, num=1000, spacing='log')
-        if LC is not None:
-            normalizationRatio = psdM[0]/periodogramE[0]
-            for i in range(freqsE.shape[0]):
-                periodogramE[i] = normalizationRatio*periodogramE[i]
-            plt.plot(np.log10(freqsE), np.log10(periodogramE), color=colory, zorder=-5)
-            plt.fill_between(np.log10(freqsE), np.log10(periodogramE - periodogramerrE),
-                             np.log10(periodogramE + periodogramerrE),
-                             facecolor=colory, alpha=0.5, zorder=-5)
         plt.plot(np.log10(freqsM[1:]), np.log10(
             psdM[1:]), label=r'$\ln PSD$', color='#000000', zorder=5, linewidth=6)
         plt.plot(np.log10(freqsM[1:]), np.log10(psdNumer[1:]),
                  label=r'$\ln PSD_{\mathrm{numerator}}$', color='#1f78b4', zorder=0, linewidth=4)
         plt.plot(np.log10(freqsM[1:]), -np.log10(psdDenom[1:]),
                  label=r'$-\ln PSD_{\mathrm{denominator}}$', color='#e31a1c', zorder=0, linewidth=4)
-        for i in range(psdNumerComp.shape[1]):
+        for i in xrange(psdNumerComp.shape[1]):
             plt.plot(np.log10(freqsM[1:]), np.log10(psdNumerComp[1:, i]),
                      color='#a6cee3', zorder=0, linewidth=2, linestyle=r'dashed')
             plt.annotate(
@@ -968,7 +1267,7 @@ class CARMATask(object):
                 textcoords='data', arrowprops=dict(
                     arrowstyle='->', connectionstyle='angle3, angleA = 0, angleB = 90'),
                 ha='center', va='center', multialignment='center', zorder=100)
-        for i in range(psdDenomComp.shape[1]):
+        for i in xrange(psdDenomComp.shape[1]):
             plt.plot(np.log10(freqsM[1:]), -np.log10(psdDenomComp[1:, i]),
                      color='#fb9a99', zorder=0, linewidth=2, linestyle=r'dashed')
             plt.annotate(
@@ -984,7 +1283,49 @@ class CARMATask(object):
         plt.legend(loc=3)
         if doShow:
             plt.show(False)
-        return newFig
+        return newFig'''
+
+    def estimate(self, observedLC):
+        """!
+        Estimate period using gatspy or scipy.spectral.periodogram
+        """
+        if observedLC.numCadences > 50:
+            model = gatspy.periodic.LombScargleFast()
+        else:
+            model = gatspy.periodic.LombScargle()
+        model.optimizer.set(quiet=True, period_range=(2.0*observedLC.meandt, observedLC.T))
+        model.fit(observedLC.t,
+                  observedLC.y,
+                  observedLC.yerr)
+        periodEst = model.best_period
+        if periodEst < 2.0*observedLC.meandt or periodEst > observedLC.T:
+            scaled_y = (observedLC.y - observedLC.mean)/observedLC.std
+            angFreqs = np.logspace(math.log10((2.0*math.pi)/(observedLC.T)),
+                                   math.log10((2.0*math.pi)/(2.0*observedLC.meandt)),
+                                   10000)
+            periodogram = scipy.signal.spectral.lombscargle(observedLC.t, scaled_y, angFreqs)
+            periodEst = 2.0*math.pi/angFreqs[np.argmax(periodogram)]
+        return periodEst
+
+    def guess(self, periodEst):
+        notGood = True
+        while notGood:
+            eccentricityGuess = random.uniform(0.0, 1.0)
+            m1Val = math.pow(10.0, random.uniform(4.0, 10.0))
+            m2Val = math.pow(10.0, random.uniform(4.0, math.log10(m1Val)))
+            totalMassVal = m1Val + m2Val
+            axisRatioVal = m2Val/m1Val
+            aTotCube = (self.G*math.pow(periodEst*self.Day, 2.0)*totalMassVal*self.SolarMass)/self.fourPiSq
+            totalAxisVal = math.pow(aTotCube, 1.0/3.0)
+            a1Guess = ((axisRatioVal*totalAxisVal)/(1 + axisRatioVal))/self.Parsec
+            a2Guess = (totalAxisVal/(1 + axisRatioVal))/self.Parsec
+            rS1Val = (2.0*self.G*m1Val*self.SolarMass)/(pow(self.c, 2.0))
+            rS2Val = (2.0*self.G*m2Val*self.SolarMass)/(pow(self.c, 2.0))
+            rPeribothronTotVal = (a1Guess + a2Guess)*self.Parsec*(1.0 - eccentricityGuess)
+            if rPeribothronTotVal > 10.0*(rS1Val + rS2Val):
+                notGood = False
+                break
+        return a1Guess, a2Guess, eccentricityGuess
 
     def fit(self, observedLC, widthT=0.01, widthF=0.05,
             zSSeed=None, walkerSeed=None, moveSeed=None, xSeed=None):
@@ -1009,38 +1350,47 @@ class CARMATask(object):
         minTLog10 = math.log10(minT)
         maxTLog10 = math.log10(maxT)
 
-        for walkerNum in range(self.nwalkers):
+        periodEst = self.estimate(observedLC)
+        for walkerNum in xrange(self.nwalkers):
             noSuccess = True
             sigmaFactor = 1.0e0
-            exp = ((maxTLog10 - minTLog10)*np.random.random(self.p + self.q + 1) + minTLog10)
-            RhoGuess = -1.0/np.power(10.0, exp)
+            expVal = ((maxTLog10 - minTLog10)*np.random.random(self._p + self._q + 1) + minTLog10)
+            a1Guess, a2Guess, eccentricityGuess = self.guess(periodEst)
+            RhoGuess = np.require(np.array([a1Guess, a2Guess, periodEst, eccentricityGuess,
+                                            random.uniform(0.0, 360.0), random.uniform(0.0, 90.0),
+                                            random.uniform(observedLC.startT,
+                                                           observedLC.startT + periodEst),
+                                            observedLC.mean] + (-1.0/np.power(10.0, expVal)).tolist()),
+                                  requirements=['F', 'A', 'W', 'O', 'E'])
             while noSuccess:
-                RhoGuess[self.p + self.q] = sigmaFactor*observedLC.std
-                ThetaGuess = coeffs(self.p, self.q, RhoGuess)
+                RhoGuess[self._r + self._p + self._q] = sigmaFactor*observedLC.std
+                ThetaGuess = coeffs(self._p, self._q, RhoGuess)
                 res = self.set(observedLC.dt, ThetaGuess)
-                lnPrior = self.logPrior(observedLC)
-                if res == 0 and lnPrior == 0.0:
+                lnPrior = self.logPrior(observedLC, widthT=widthT, widthF=widthF)
+                if res == 0 and not np.isinf(lnPrior):
                     noSuccess = False
                 else:
-                    print('SigmaTrial: %e'%(RhoGuess[self.p + self.q]))
                     sigmaFactor *= 0.31622776601  # sqrt(0.1)
 
-            for dimNum in range(self.ndims):
+            for dimNum in xrange(self.ndims):
                 xStart[dimNum + walkerNum*self.ndims] = ThetaGuess[dimNum]
         res = self._taskCython.fit_CARMAModel(
-            observedLC.dt, observedLC.numCadences, observedLC.tolIR, observedLC.maxSigma*observedLC.std,
-            observedLC.minTimescale*observedLC.mindt, observedLC.maxTimescale*observedLC.T, observedLC.t,
-            observedLC.x, observedLC.y - observedLC.mean, observedLC.yerr, observedLC.mask, self.nwalkers,
-            self.nsteps, self.maxEvals, self.xTol, self.mcmcA, zSSeed, walkerSeed, moveSeed, xSeed, xStart,
-            self._Chain, self._LnPrior, self._LnLikelihood)
+            observedLC.dt, observedLC.numCadences, observedLC.meandt, observedLC.tolIR,
+            observedLC.maxSigma*observedLC.std, observedLC.minTimescale*observedLC.mindt,
+            observedLC.maxTimescale*observedLC.T, np.min(observedLC.y), np.max(observedLC.y),
+            observedLC.startT, observedLC.t, observedLC.x, observedLC.y, observedLC.yerr, observedLC.mask,
+            self.nwalkers, self.nsteps, self.maxEvals, self.xTol, self.mcmcA,
+            zSSeed, walkerSeed, moveSeed, xSeed, xStart, self._Chain, self._LnPrior, self._LnLikelihood,
+            periodEst, widthT*periodEst,
+            observedLC.mean, widthF*observedLC.mean)
 
         meanTheta = list()
-        for dimNum in range(self.ndims):
-            meanTheta.append(np.mean(self.Chain[dimNum, :, self.nsteps//2:]))
+        for dimNum in xrange(self.ndims):
+            meanTheta.append(np.mean(self.Chain[dimNum, :, self.nsteps/2:]))
         meanTheta = np.require(meanTheta, requirements=['F', 'A', 'W', 'O', 'E'])
         self.set(observedLC.dt, meanTheta)
         devianceThetaBar = -2.0*self.logLikelihood(observedLC)
-        barDeviance = np.mean(-2.0*self.LnLikelihood[:, self.nsteps//2:])
+        barDeviance = np.mean(-2.0*self.LnLikelihood[:, self.nsteps/2:])
         self._pDIC = barDeviance - devianceThetaBar
         self._dic = devianceThetaBar + 2.0*self.pDIC
         self.rootChain
@@ -1048,6 +1398,7 @@ class CARMATask(object):
         self.bestTheta
         self.bestRho
         self.bestTau
+        self.auxillaryChain
         return res
 
     @property
@@ -1128,7 +1479,7 @@ class CARMATask(object):
             requirements=['F', 'A', 'W', 'O', 'E'])
         unObsErr = math.sqrt(sys.float_info.max)
         obsCtr = 0
-        for i in range(observedLC.numCadencesSmooth):
+        for i in xrange(observedLC.numCadencesSmooth):
             if observedLC.tSmooth[i] == observedLC.t[obsCtr]:
                 observedLC.xSmooth[i] = 0.0
                 observedLC.xerrSmooth[i] = unObsErr
@@ -1144,19 +1495,26 @@ class CARMATask(object):
                 observedLC.yerrSmooth[i] = unObsErr
                 observedLC.maskSmooth[i] = 0.0
 
-        preSmoothYMean = np.mean(observedLC.ySmooth[np.nonzero(observedLC.maskSmooth)])
         res = self._taskCython.smooth_RTS(
-            observedLC.numCadencesSmooth, -1, observedLC.tolIR, observedLC.tSmooth, observedLC.xSmooth,
-            observedLC.ySmooth - preSmoothYMean, observedLC.yerrSmooth, observedLC.maskSmooth,
-            observedLC.XComp, observedLC.PComp, observedLC.XSmooth, observedLC.PSmooth, tnum)
-        for i in range(observedLC.numCadencesSmooth):
-            observedLC.xSmooth[i] = observedLC.XSmooth[i*observedLC.pComp] + preSmoothYMean
-            try:
-                observedLC.xerrSmooth[i] = math.sqrt(observedLC.PSmooth[i*observedLC.pComp*observedLC.pComp])
-            except ValueError:
-                observedLC.xerrSmooth[i] = 0.0
+            observedLC.numCadencesSmooth, -1, observedLC.tolIR, observedLC.startT,
+            observedLC.tSmooth, observedLC.xSmooth,
+            observedLC.ySmooth, observedLC.yerrSmooth, observedLC.maskSmooth,
+            observedLC.XComp, observedLC.PComp, observedLC.XSmooth, observedLC.PSmooth,
+            observedLC.xSmooth, observedLC.xerrSmooth, tnum)
         observedLC._isSmoothed = True
         return res
+
+    @property
+    def auxillaryChain(self):
+        if hasattr(self, '_auxillaryChain'):
+            return np.reshape(self._auxillaryChain, newshape=(13, self._nwalkers, self._nsteps), order='F')
+        else:
+            self._auxillaryChain = np.require(np.zeros(13*self.nwalkers*self.nsteps),
+                                              requirements=['F', 'A', 'W', 'O', 'E'])
+            MBHBCARMATask_cython.compute_Aux(self.ndims, self.nwalkers, self.nsteps,
+                                             self.sigmaStars, self.H, self.rhoStars,
+                                             self._Chain, self._auxillaryChain)
+            return np.reshape(self._auxillaryChain, newshape=(13, self._nwalkers, self._nsteps), order='F')
 
     def plotscatter(self, dimx, dimy, truthx=None, truthy=None, labelx=None, labely=None,
                     best=False, median=False,
@@ -1170,15 +1528,15 @@ class CARMATask(object):
                         c=self.LnPosterior[:, self.nsteps/2:], edgecolors='none')
             plt.colorbar()
             if best:
-                loc0 = np.where(self.LnPosterior[self.nsteps//2:] ==
-                                np.max(self.LnPosterior[self.nsteps//2:]))[0][0]
-                loc1 = np.where(self.LnPosterior[self.nsteps//2:] ==
+                loc0 = np.where(self.LnPosterior[self.nsteps/2:] ==
+                                np.max(self.LnPosterior[self.nsteps/2:]))[0][0]
+                loc1 = np.where(self.LnPosterior[self.nsteps/2:] ==
                                 np.max(self.LnPosterior[self.nsteps/2:]))[1][0]
                 plt.axvline(x=self.timescaleChain[dimx, loc0, loc1], c=r'#ffff00', label=r'Best %s'%(labelx))
                 plt.axhline(y=self.timescaleChain[dimy, loc0, loc1], c=r'#ffff00', label=r'Best %s'%(labely))
             if median:
-                medx = np.median(self.timescaleChain[dimx, :, self.nsteps//2:])
-                medy = np.median(self.timescaleChain[dimy, :, self.nsteps//2:])
+                medx = np.median(self.timescaleChain[dimx, :, self.nsteps/2:])
+                medy = np.median(self.timescaleChain[dimy, :, self.nsteps/2:])
                 plt.axvline(x=medx, c=r'#ff00ff', label=r'Median %s'%(labelx))
                 plt.axhline(y=medy, c=r'#ff00ff', labely=r'Median %s'%(labely))
         if truthx is not None:
@@ -1198,10 +1556,10 @@ class CARMATask(object):
         if clearFig:
             plt.clf()
         if dim < self.ndims:
-            for i in range(self.nwalkers):
+            for i in xrange(self.nwalkers):
                 plt.plot(self.timescaleChain[dim, i, :], c=r'#0000ff', alpha=0.1)
             plt.plot(np.median(self.timescaleChain[dim, :, :], axis=0), c=r'#ff0000')
-            plt.fill_between(list(range(self.nsteps)),
+            plt.fill_between(range(self.nsteps),
                              np.median(self.timescaleChain[dim, :, :], axis=0) -
                              np.std(self.timescaleChain[dim, :, :], axis=0),
                              np.median(self.timescaleChain[dim, :, :], axis=0) +
@@ -1217,24 +1575,65 @@ class CARMATask(object):
         return newFig
 
     def plottriangle(self, doShow=False, plot_contours=True, cmap='cubehelix'):
+        orbitChain = copy.copy(self.timescaleChain[0:self.r, :, self.nsteps/2:])
+        flatOrbitChain = np.swapaxes(orbitChain.reshape((self.r, -1), order='F'), axis1=0, axis2=1)
+        orbitLabels = [r'$a_{1}$ (pc)', r'$a_{2}$ (pc)', r'$T$ (d)', r'$e$', r'$\Omega$ (deg.)', r'$i$ (deg)',
+                       r'$\tau$ (d)', r'$F$']
+        orbitExtents = [0.9, 0.9, (0.95*np.min(self.timescaleChain[2, :, self.nsteps/2:]),
+                                   1.05*np.max(self.timescaleChain[2, :, self.nsteps/2:])), 0.9, 0.9, 0.9,
+                        0.9, (0.85*np.min(self.timescaleChain[7, :, self.nsteps/2:]),
+                              1.15*np.max(self.timescaleChain[7, :, self.nsteps/2:]))]
+        newFigOrb = kali.util.triangle.corner(flatOrbitChain, labels=orbitLabels,
+                                              show_titles=True,
+                                              title_fmt='.2e',
+                                              quantiles=[0.16, 0.5, 0.84],
+                                              extents=orbitExtents,
+                                              plot_contours=plot_contours,
+                                              plot_datapoints=False,
+                                              plot_contour_lines=False,
+                                              pcolor_cmap=cm.get_cmap(cmap),
+                                              verbose=False)
+
         stochasticChain = copy.copy(self.timescaleChain[self.r:, :, self.nsteps/2:])
-        flatStochasticChain = np.swapaxes(stochasticChain.reshape((self.ndims, -1), order='F'),
+        flatStochasticChain = np.swapaxes(stochasticChain.reshape((self.ndims - self.r, -1), order='F'),
                                           axis1=0, axis2=1)
         stochasticLabels = []
-        for i in range(self.p):
+        for i in xrange(self.p):
             stochasticLabels.append(r'$\tau_{\mathrm{AR,} %d}$ (d)'%(i + 1))
-        for i in range(self.q):
+        for i in xrange(self.q):
             stochasticLabels.append(r'$\tau_{\mathrm{MA,} %d}$ (d)'%(i + 1))
         stochasticLabels.append(r'$\mathrm{Amp.}$')
-        newFig = kali.util.triangle.corner(flatStochasticChain, labels=stochasticLabels,
-                                           show_titles=True,
-                                           title_fmt='.2e',
-                                           quantiles=[0.16, 0.5, 0.84],
-                                           plot_contours=plot_contours,
-                                           plot_datapoints=False,
-                                           plot_contour_lines=False,
-                                           pcolor_cmap=cm.get_cmap(cmap),
-                                           verbose=False)
+        newFigSto = kali.util.triangle.corner(flatStochasticChain, labels=stochasticLabels,
+                                              show_titles=True,
+                                              title_fmt='.2e',
+                                              quantiles=[0.16, 0.5, 0.84],
+                                              plot_contours=plot_contours,
+                                              plot_datapoints=False,
+                                              plot_contour_lines=False,
+                                              pcolor_cmap=cm.get_cmap(cmap),
+                                              verbose=False)
+
+        auxChain = copy.copy(self.auxillaryChain[:, :, self.nsteps/2:])
+        flatAuxChain = np.swapaxes(auxChain.reshape((13, -1), order='F'), axis1=0, axis2=1)
+        auxLabels = [r'$a_{1}$ (pc)', r'$a_{2}$ (pc)', r'$T$ (d)', r'$e$',
+                     r'$M_{12}$ ($10^{6} \times M_{\odot}$)', r'$M_{2}/M_{1}$',
+                     r'$r_{\mathrm{Peribothron}}$ (pc)', r'$r_{\mathrm{Apobothron}}$ (pc)',
+                     r'$r_{\mathrm{Schwarzschild}}$ (pc)',
+                     r'$a_{\mathrm{Hard}}$ (pc)', r'$a_{\mathrm{GW}}$ (pc)', r'$T_{\mathrm{Hard}}$ (yr)',
+                     r'$M_{\mathrm{Eject}}$ ($10^{6} \times M_{\odot}$)']
+        auxExtents = [0.9, 0.9, (0.95*np.min(self.auxillaryChain[2, :, self.nsteps/2:]),
+                                 1.05*np.max(self.auxillaryChain[2, :, self.nsteps/2:])), 0.9, 0.9, 0.9,
+                      0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
+        newFigAux = kali.util.triangle.corner(flatAuxChain, labels=auxLabels,
+                                              show_titles=True,
+                                              title_fmt='.2e',
+                                              quantiles=[0.16, 0.5, 0.84],
+                                              extents=auxExtents,
+                                              plot_contours=plot_contours,
+                                              plot_datapoints=False,
+                                              plot_contour_lines=False,
+                                              pcolor_cmap=cm.get_cmap(cmap),
+                                              verbose=False)
         if doShow:
             plt.show(False)
-        return newFig,
+        return newFigSto, newFigOrb, newFigAux
