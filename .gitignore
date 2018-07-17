@@ -36,6 +36,7 @@ lastfailed
 
 # Python
 *.pyc
+*.bak
 
 # Data, Images, and Documents
 *.dat
@@ -49,6 +50,9 @@ lastfailed
 
 # Backups
 *~
+
+# notebook cache
+*/.ipynb_checkpoints/*
 
 # Python Extensions
 _libcarma.py
