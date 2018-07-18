@@ -1,4 +1,12 @@
-# `Kālī`
+# This is a fork version of the original Kālī
+I have made a few improvement as listed below:
+- Now supporting Python 3.6
+- Remove wired Matplotlib warnings
+- Clean up import calls at the top of most module files
+- Add docker directory (build docker image that can run Kali)
+
+---
+# Kālī
 `Kālī` is a software library to model time series data using various stochastic processes such as
 Continuous-time ARMA (C-ARMA) processes. The name of the library is taken from the Hindu goddess Kālī, who is
 the goddess of time and change. It also stands for KArma (C-ARMA) LIbrary because the library began as a tool

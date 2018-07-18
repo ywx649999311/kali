@@ -52,7 +52,7 @@ lastfailed
 *~
 
 # notebook cache
-*/.ipynb_checkpoints/*
+*.ipynb_checkpoints/
 
 # Python Extensions
 _libcarma.py
