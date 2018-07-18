@@ -1,0 +1,109 @@
+FROM ubuntu:16.04
+
+USER root
+
+# Install all OS dependencies for notebook server that starts but lacks all
+# features (e.g., download as all possible file formats)
+RUN apt-get update && apt-get -yq dist-upgrade \
+ && apt-get install -yq --no-install-recommends \
+    curl \
+    bzip2 \
+    ca-certificates \
+    sudo \
+    locales \
+    nano \
+ && rm -rf /var/lib/apt/lists/*
+
+# Other packages
+RUN apt-get update && apt-get install -yq --no-install-recommends \
+    cmake \
+    flex \
+    g++ \
+    gettext \
+    git \
+    libbz2-dev \
+    libfontconfig1 \
+    libglib2.0-dev \
+    libncurses5-dev \
+    libreadline6-dev \
+    libssl-dev \
+    libx11-dev \
+    libxrender1 \
+    libxt-dev \
+    openjdk-8-jre \
+    perl-modules \
+    zlib1g-dev \
+    cpio \
+    texlive-full \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
+    locale-gen
+
+# Configure environment
+ENV SHELL=/bin/bash \
+    LC_ALL=en_US.UTF-8 \
+    LANG=en_US.UTF-8 \
+    LANGUAGE=en_US.UTF-8 \
+    HOME=/home \
+    GXX_ROOT=/usr/lib/gcc/x86_64-linux-gnu/5/
+
+# Install anaconda
+WORKDIR $HOME
+RUN curl -OL https://repo.continuum.io/archive/Anaconda3-5.2.0-Linux-x86_64.sh \
+ && bash Anaconda3-5.2.0-Linux-x86_64.sh -b -p /home/conda \
+ && rm Anaconda3-5.2.0-Linux-x86_64.sh
+
+ENV PATH=/home/conda/bin:${PATH}
+
+RUN conda update -y --all \
+ && conda install -y \
+    cython \
+    pytest
+
+RUN pip install -U pip && pip install \
+    gatspy \
+    fitsio \
+    multi_key_dict
+
+RUN apt-get update && apt-get install -yq --no-install-recommends gcc-5 g++-5
+
+# Intel MKL
+RUN mkdir -p /home/IntelMKL/
+WORKDIR /home/IntelMKL/
+RUN curl -OL http://registrationcenter-download.intel.com/akdlm/irc_nas/tec/11544/l_mkl_2017.3.196.tgz \
+ && tar -xvzf l_mkl_2017.3.196.tgz \
+ && rm l_mkl_2017.3.196.tgz
+
+# Copy config file and install MKL
+COPY my_silent.cfg /home/IntelMKL/l_mkl_2017.3.196/
+RUN ./l_mkl_2017.3.196/install.sh --silent "./l_mkl_2017.3.196/my_silent.cfg"
+
+# NLopt
+WORKDIR $HOME
+RUN git clone https://github.com/stevengj/nlopt.git
+RUN mkdir /home/nlopt/build && cd /home/nlopt/build \
+ && cmake ..
+RUN cd /home/nlopt/build && make && sudo make install \
+ && sudo ldconfig
+
+# Install Kali
+RUN cd /home/ && git clone https://github.com/ywx649999311/kali.git
+RUN cd /home/kali && \
+    /bin/bash -c "source /home/kali/bin/setup.sh; \
+    source /opt/intel/mkl/bin/mklvars.sh intel64; \
+    python setup.py build_ext"
+RUN echo "source /opt/intel/mkl/bin/mklvars.sh intel64" >> /home/.bashrc
+RUN echo "source /home/kali/bin/setup.sh" >> /home/.bashrc
+
+# Install Tini
+ENV TINI_VERSION v0.17.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+RUN ["chmod", "+x", "/tini"]
+
+COPY entry.sh /home/
+RUN ["chmod", "+x", "/home/entry.sh"]
+ENTRYPOINT ["/tini", "--", "/home/entry.sh"]
+
+EXPOSE 8888
+WORKDIR $HOME
