@@ -2,7 +2,7 @@
 """	Module that defines light curve objects.
 """
 import numpy as np
-import math, cmath, operator, sys, abc, psutil, types, os, 
+import math, cmath, operator, sys, abc, psutil, types, os
 import warnings, reprlib, copy, pdb
 import scipy.stats as spstats
 from scipy.interpolate import UnivariateSpline
