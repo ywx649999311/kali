@@ -560,7 +560,7 @@ void kali::CARMATask::compute_ACVF(int numLags, double *Lags, double *ACVF, int 
 	Systems[threadNum].computeACVF(numLags, Lags, ACVF);
 	}
 
-int kali::CARMATask::fit_CARMAModel(double dt, int numCadences, double tolIR, double maxSigma, double minTimescale, double maxTimescale, double *t, double *x, double *y, double *yerr, double *mask, int nwalkers, int nsteps, int maxEvals, double xTol, double mcmcA, unsigned int zSSeed, unsigned int walkerSeed, unsigned int moveSeed, unsigned int xSeed, double* xStart, double *Chain, double *LnPrior, double *LnLikelihood) {
+int kali::CARMATask::fit_CARMAModel(double dt, int numCadences, double tolIR, double maxSigma, double minTimescale, double maxTimescale, double *t, double *x, double *y, double *yerr, double *mask, int nwalkers, int nsteps, int maxEvals, double xTol, double mcmcA, unsigned int zSSeed, unsigned int walkerSeed, unsigned int moveSeed, unsigned int xSeed, double* xStart, double *Chain, double *LnPrior, double *LnLikelihood, bool Bp) {
 	omp_set_num_threads(numThreads);
 	int ndims = p + q + 1;
 	int threadNum = omp_get_thread_num();
@@ -608,7 +608,7 @@ int kali::CARMATask::fit_CARMAModel(double dt, int numCadences, double tolIR, do
 		}
 	double *max_LnPosterior = static_cast<double*>(_mm_malloc(numThreads*sizeof(double),64));
 	kali::CARMA *ptrToSystems = Systems;
-	#pragma omp parallel for default(none) shared(dt, nwalkers, ndims, optArray, initPos, xStart, t, ptrToSystems, xVec, max_LnPosterior, p2Args)
+	#pragma omp parallel for default(none) shared(dt, nwalkers, ndims, optArray, initPos, xStart, t, ptrToSystems, xVec, max_LnPosterior, p2Args, Bp)
 	for (int walkerNum = 0; walkerNum < nwalkers; ++walkerNum) {
 		int threadNum = omp_get_thread_num();
 		max_LnPosterior[threadNum] = 0.0;
@@ -632,7 +632,12 @@ int kali::CARMATask::fit_CARMAModel(double dt, int numCadences, double tolIR, do
 			max_LnPosterior[threadNum] = 0.0;
 			}
 		#endif
-		nlopt::result yesno = optArray[threadNum]->optimize(xVec[threadNum], max_LnPosterior[threadNum]);
+
+		//if Bp (bypass nplot) is false, then do nlopt optimization.
+		if(!Bp){
+			nlopt::result yesno = optArray[threadNum]->optimize(xVec[threadNum], max_LnPosterior[threadNum]);
+		}
+
 		#ifdef DEBUG_FIT_CARMAMODEL
 			#pragma omp critical
 			{

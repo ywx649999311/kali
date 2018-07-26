@@ -972,7 +972,7 @@ class CARMATask(object):
         return newFig
 
     def fit(self, observedLC, widthT=0.01, widthF=0.05,
-            zSSeed=None, walkerSeed=None, moveSeed=None, xSeed=None):
+            zSSeed=None, walkerSeed=None, moveSeed=None, xSeed=None, Bp=True):
         observedLC.pComp = self.p
         observedLC.qComp = self.q
         randSeed = np.zeros(1, dtype='uint32')
@@ -1017,7 +1017,7 @@ class CARMATask(object):
             observedLC.minTimescale*observedLC.mindt, observedLC.maxTimescale*observedLC.T, observedLC.t,
             observedLC.x, observedLC.y - observedLC.mean, observedLC.yerr, observedLC.mask, self.nwalkers,
             self.nsteps, self.maxEvals, self.xTol, self.mcmcA, zSSeed, walkerSeed, moveSeed, xSeed, xStart,
-            self._Chain, self._LnPrior, self._LnLikelihood)
+            self._Chain, self._LnPrior, self._LnLikelihood, Bp)
 
         meanTheta = list()
         for dimNum in range(self.ndims):
