@@ -1000,7 +1000,7 @@ class CARMATask(object):
             sigmaFactor = 1.0e0
             exp = ((maxTLog10 - minTLog10)*np.random.random(self.p + self.q + 1) + minTLog10)
             RhoGuess = -1.0/np.power(10.0, exp)
-            while noSuccess and count < 200:
+            while noSuccess and count < 500:
                 RhoGuess[self.p + self.q] = sigmaFactor*observedLC.std
                 ThetaGuess = coeffs(self.p, self.q, RhoGuess)
                 res = self.set(observedLC.dt, ThetaGuess)
@@ -1012,7 +1012,7 @@ class CARMATask(object):
                     count += 1
                     sigmaFactor *= 0.31622776601  # sqrt(0.1)
 
-            if count == 200:
+            if count == 500:
                 raise ValueError('Infinite noSuccess loop in carma.fit!')
 
             for dimNum in range(self.ndims):
