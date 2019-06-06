@@ -145,7 +145,7 @@ class CARMATask(object):
 
     def __init__(self, p, q, nthreads=psutil.cpu_count(logical=True), nburn=1000000,
                  nwalkers=25*psutil.cpu_count(logical=True), nsteps=250, maxEvals=10000, xTol=0.001,
-                 mcmcA=2.0):
+                 mcmcA=2.0, minT=None, maxT=None):
         try:
             assert p > q, r'p must be greater than q'
             assert p >= 1, r'p must be greater than or equal to 1'
@@ -164,6 +164,8 @@ class CARMATask(object):
             assert isinstance(maxEvals, int), r'maxEvals must be an integer'
             assert xTol > 0.0, r'xTol must be greater than 0'
             assert isinstance(xTol, float), r'xTol must be a float'
+            self._minT = minT
+            self._maxT = maxT
             self._p = p
             self._q = q
             self._ndims = self._p + self._q + 1
@@ -687,10 +689,14 @@ class CARMATask(object):
     def logPrior(self, observedLC, forced=True, tnum=None):
         if tnum is None:
             tnum = 0
+
+        # hard timescales priors
+        minT = self._minT if self._minT is not None else observedLC.mindt*observedLC.minTimescale
+        maxT = self._maxT if self._maxT is not None else observedLC.T*observedLC.maxTimescale
         observedLC._logPrior = self._taskCython.compute_LnPrior(observedLC.numCadences, observedLC.tolIR,
                                                                 observedLC.maxSigma*observedLC.std,
-                                                                observedLC.minTimescale*observedLC.mindt,
-                                                                observedLC.maxTimescale*observedLC.T,
+                                                                minT,
+                                                                maxT,
                                                                 observedLC.t, observedLC.x,
                                                                 observedLC.y - observedLC.mean,
                                                                 observedLC.yerr, observedLC.mask, tnum)
@@ -971,8 +977,8 @@ class CARMATask(object):
             plt.show(False)
         return newFig
 
-    def fit(self, observedLC, widthT=0.01, widthF=0.05,
-            zSSeed=None, walkerSeed=None, moveSeed=None, xSeed=None, Bp=True):
+    def fit(self, observedLC, widthT=0.01, widthF=0.05, zSSeed=None, 
+            walkerSeed=None, moveSeed=None, xSeed=None, Bp=True, wideInit=False):
         observedLC.pComp = self.p
         observedLC.qComp = self.q
         randSeed = np.zeros(1, dtype='uint32')
@@ -988,9 +994,11 @@ class CARMATask(object):
         if xSeed is None:
             rand.rdrand(randSeed)
             xSeed = randSeed[0]
+        
         xStart = np.require(np.zeros(self.ndims*self.nwalkers), requirements=['F', 'A', 'W', 'O', 'E'])
-        minT = observedLC.mindt*observedLC.minTimescale
-        maxT = observedLC.T*observedLC.maxTimescale
+        
+        minT = self._minT if (wideInit and self._minT is not None) else observedLC.mindt*observedLC.minTimescale
+        maxT = self._maxT if (wideInit and self._maxT is not None) else observedLC.T*observedLC.maxTimescale
         minTLog10 = math.log10(minT)
         maxTLog10 = math.log10(maxT)
 
@@ -1000,7 +1008,7 @@ class CARMATask(object):
             sigmaFactor = 1.0e0
             exp = ((maxTLog10 - minTLog10)*np.random.random(self.p + self.q + 1) + minTLog10)
             RhoGuess = -1.0/np.power(10.0, exp)
-            while noSuccess and count < 500:
+            while noSuccess and count < 5000:
                 RhoGuess[self.p + self.q] = sigmaFactor*observedLC.std
                 ThetaGuess = coeffs(self.p, self.q, RhoGuess)
                 res = self.set(observedLC.dt, ThetaGuess)
@@ -1012,14 +1020,20 @@ class CARMATask(object):
                     count += 1
                     sigmaFactor *= 0.31622776601  # sqrt(0.1)
 
-            if count == 500:
+            if count == 5000:
                 raise ValueError('Infinite noSuccess loop in carma.fit!')
 
             for dimNum in range(self.ndims):
                 xStart[dimNum + walkerNum*self.ndims] = ThetaGuess[dimNum]
+        
+        minT = self._minT if (
+            self._minT is not None) else observedLC.mindt*observedLC.minTimescale
+        maxT = self._maxT if (
+            self._maxT is not None) else observedLC.T*observedLC.maxTimescale
+        
         res = self._taskCython.fit_CARMAModel(
             observedLC.dt, observedLC.numCadences, observedLC.tolIR, observedLC.maxSigma*observedLC.std,
-            observedLC.minTimescale*observedLC.mindt, observedLC.maxTimescale*observedLC.T, observedLC.t,
+            minT,  maxT, observedLC.t,
             observedLC.x, observedLC.y - observedLC.mean, observedLC.yerr, observedLC.mask, self.nwalkers,
             self.nsteps, self.maxEvals, self.xTol, self.mcmcA, zSSeed, walkerSeed, moveSeed, xSeed, xStart,
             self._Chain, self._LnPrior, self._LnLikelihood, Bp)
@@ -1028,6 +1042,71 @@ class CARMATask(object):
         for dimNum in range(self.ndims):
             meanTheta.append(np.mean(self.Chain[dimNum, :, self.nsteps//2:]))
         meanTheta = np.require(meanTheta, requirements=['F', 'A', 'W', 'O', 'E'])
+        self.set(observedLC.dt, meanTheta)
+        devianceThetaBar = -2.0*self.logLikelihood(observedLC)
+        barDeviance = np.mean(-2.0*self.LnLikelihood[:, self.nsteps//2:])
+        self._pDIC = barDeviance - devianceThetaBar
+        self._dic = devianceThetaBar + 2.0*self.pDIC
+        self.rootChain
+        self.timescaleChain
+        self.bestTheta
+        self.bestRho
+        self.bestTau
+        return res
+
+    def newFit(self, observedLC, bestWalker, widthT=0.01, widthF=0.05, zSSeed=None,
+            walkerSeed=None, moveSeed=None, xSeed=None, Bp=True,
+            nWalkers = 100, nSteps = 500, mcmcA = 1.4, scatter=1e-4, narrowPrior=False):
+        
+        observedLC.pComp = self.p
+        observedLC.qComp = self.q
+        self.nwalkers = nWalkers
+        self.nsteps = nSteps
+        self._mcmcA = mcmcA
+        
+        # turn off wide prior while mapping posterior
+        if narrowPrior:
+            self._minT, self._maxT = None, None
+
+        randSeed = np.zeros(1, dtype='uint32')
+        if zSSeed is None:
+            rand.rdrand(randSeed)
+            zSSeed = randSeed[0]
+        if walkerSeed is None:
+            rand.rdrand(randSeed)
+            walkerSeed = randSeed[0]
+        if moveSeed is None:
+            rand.rdrand(randSeed)
+            moveSeed = randSeed[0]
+        if xSeed is None:
+            rand.rdrand(randSeed)
+            xSeed = randSeed[0]
+
+        assert isinstance(bestWalker, np.ndarray), 'Must provide a numpy array for bestWalker'
+        assert len(bestWalker) == self.ndims, 'Dimention for bestWalker doesn\'t match with desired!'
+
+        # Initialize walker around the best-fit, with a std of 'scatter' in the log scale
+        xStart = np.array([np.log10(bestWalker) + scatter*np.random.randn(self.ndims) for i in range(self.nwalkers)])
+        xStart = xStart.flatten()
+        xStart = 10**xStart
+
+        minT = self._minT if (
+            self._minT is not None) else observedLC.mindt*observedLC.minTimescale
+        maxT = self._maxT if (
+            self._maxT is not None) else observedLC.T*observedLC.maxTimescale
+
+        res = self._taskCython.fit_CARMAModel(
+            observedLC.dt, observedLC.numCadences, observedLC.tolIR, observedLC.maxSigma*observedLC.std,
+            minT,  maxT, observedLC.t,
+            observedLC.x, observedLC.y -
+            observedLC.mean, observedLC.yerr, observedLC.mask, self.nwalkers,
+            self.nsteps, self.maxEvals, self.xTol, self.mcmcA, zSSeed, walkerSeed, moveSeed, xSeed, xStart, self._Chain, self._LnPrior, self._LnLikelihood, Bp)
+
+        meanTheta = list()
+        for dimNum in range(self.ndims):
+            meanTheta.append(np.mean(self.Chain[dimNum, :, self.nsteps//2:]))
+        meanTheta = np.require(meanTheta, requirements=[
+                               'F', 'A', 'W', 'O', 'E'])
         self.set(observedLC.dt, meanTheta)
         devianceThetaBar = -2.0*self.logLikelihood(observedLC)
         barDeviance = np.mean(-2.0*self.LnLikelihood[:, self.nsteps//2:])
