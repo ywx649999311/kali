@@ -5,14 +5,14 @@ USER root
 # Install all OS dependencies for notebook server that starts but lacks all
 # features (e.g., download as all possible file formats)
 RUN apt-get update && apt-get -yq dist-upgrade \
- && apt-get install -yq --no-install-recommends \
+    && apt-get install -yq --no-install-recommends \
     curl \
     bzip2 \
     ca-certificates \
     sudo \
     locales \
     nano \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Other packages
 RUN apt-get update && apt-get install -yq --no-install-recommends \
@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -yq --no-install-recommends \
     zlib1g-dev \
     cpio \
     texlive-full \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
     locale-gen
@@ -48,44 +48,53 @@ ENV SHELL=/bin/bash \
     HOME=/home \
     GXX_ROOT=/usr/lib/gcc/x86_64-linux-gnu/5/
 
-# Install anaconda
-WORKDIR $HOME
-RUN curl -OL https://repo.continuum.io/archive/Anaconda3-5.2.0-Linux-x86_64.sh \
- && bash Anaconda3-5.2.0-Linux-x86_64.sh -b -p /home/conda \
- && rm Anaconda3-5.2.0-Linux-x86_64.sh
-
-ENV PATH=/home/conda/bin:${PATH}
-
-RUN conda update -y --all \
- && conda install -y \
-    cython \
-    pytest
-
-RUN pip install -U pip && pip install \
-    gatspy \
-    fitsio \
-    multi_key_dict
-
-RUN apt-get update && apt-get install -yq --no-install-recommends gcc-5 g++-5
+RUN apt-get update && apt-get install -yq --no-install-recommends \
+    gcc-5 \
+    g++-5 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Intel MKL
 RUN mkdir -p /home/IntelMKL/
 WORKDIR /home/IntelMKL/
-RUN curl -OL http://registrationcenter-download.intel.com/akdlm/irc_nas/tec/11544/l_mkl_2017.3.196.tgz \
- && tar -xvzf l_mkl_2017.3.196.tgz \
- && rm l_mkl_2017.3.196.tgz
+RUN curl -OL http://registrationcenter-download.intel.com/akdlm/irc_nas/tec/12725/l_mkl_2018.2.199_online.tgz \
+    && tar -xvzf l_mkl_2018.2.199_online.tgz  \
+    && rm l_mkl_2018.2.199_online.tgz 
 
 # Copy config file and install MKL
-COPY my_silent.cfg /home/IntelMKL/l_mkl_2017.3.196/
-RUN ./l_mkl_2017.3.196/install.sh --silent "./l_mkl_2017.3.196/my_silent.cfg"
+COPY my_silent.cfg /home/IntelMKL/l_mkl_2018.2.199_online/
+RUN ./l_mkl_2018.2.199_online/install.sh --silent "./l_mkl_2018.2.199_online/my_silent.cfg"
 
 # NLopt
 WORKDIR $HOME
 RUN git clone https://github.com/stevengj/nlopt.git
 RUN mkdir /home/nlopt/build && cd /home/nlopt/build \
- && cmake ..
+    && cmake ..
 RUN cd /home/nlopt/build && make && sudo make install \
- && sudo ldconfig
+    && sudo ldconfig
+
+# Install anaconda
+WORKDIR $HOME
+RUN curl -OL https://repo.anaconda.com/archive/Anaconda3-2019.10-Linux-x86_64.sh \
+    && bash Anaconda3-2019.10-Linux-x86_64.sh -b -p /home/conda \
+    && rm Anaconda3-2019.10-Linux-x86_64.sh
+
+ENV PATH=/home/conda/bin:${PATH}
+
+RUN conda update -y --all \
+    && conda install -y \
+    cython \
+    pytest \
+    h5py \
+    joblib
+
+RUN pip install -U pip && pip install \
+    gatspy \
+    fitsio \
+    multi_key_dict \
+    msgpack
+
+RUN apt-get update && apt-get install -y libcr-dev mpich \
+    && pip install mpi4py
 
 # Install Kali
 RUN cd /home/ && git clone https://github.com/ywx649999311/kali.git
@@ -95,9 +104,11 @@ RUN cd /home/kali && \
     python setup.py build_ext"
 RUN echo "source /opt/intel/mkl/bin/mklvars.sh intel64" >> /home/.bashrc
 RUN echo "source /home/kali/bin/setup.sh" >> /home/.bashrc
+RUN echo "export CC=mpicc" >> ~/.bashrc \
+    && echo "export HDF5_MPI=ON" >> ~/.bashrc
 
 # Install Tini
-ENV TINI_VERSION v0.17.0
+ENV TINI_VERSION v0.18.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
 RUN ["chmod", "+x", "/tini"]
 
