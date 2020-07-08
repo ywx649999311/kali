@@ -1,0 +1,31 @@
+From wyu16/kali:base021720
+
+USER root
+
+# update jupyter
+RUN conda update -c conda-forge jupyterlab jupyterlab_server -y \
+    && conda install -c conda-forge -y celerite
+
+# Install Kali
+RUN cd /home/ && git clone https://github.com/ywx649999311/kali.git
+RUN cd /home/kali && \
+    /bin/bash -c "source /home/kali/bin/setup.sh; \
+    source /opt/intel/mkl/bin/mklvars.sh intel64; \
+    python setup.py build_ext"
+RUN echo "source /opt/intel/mkl/bin/mklvars.sh intel64" >> /home/.bashrc
+RUN echo "source /home/kali/bin/setup.sh" >> /home/.bashrc
+
+# Install Tini
+ENV TINI_VERSION v0.19.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+RUN ["chmod", "+x", "/tini"]
+
+# cp external config and start.sh
+COPY entry.sh /home/
+COPY jupyter_notebook_config.py $HOME/.jupyter/
+
+RUN ["chmod", "+x", "/home/entry.sh"]
+ENTRYPOINT ["/tini", "--", "/home/entry.sh"]
+
+EXPOSE 8888
+WORKDIR $HOME
